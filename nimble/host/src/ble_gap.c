@@ -1303,6 +1303,16 @@ ble_gap_adv_active_instance(uint8_t instance)
 }
 #endif
 
+#if MYNEWT_VAL(BLE_EXT_ADV)
+int ble_gap_ext_adv_active(uint8_t instance)
+{
+    if (instance >= BLE_ADV_INSTANCES) {
+        return 0;
+    }
+    return ble_gap_adv_active_instance(instance);
+}
+#endif
+
 /**
  * Clears advertisement and discovery state.  This function is necessary
  * when the controller loses its active state (e.g. on stack reset).
@@ -2169,11 +2179,6 @@ ble_gap_wl_set(const ble_addr_t *addrs, uint8_t white_list_count)
 
     ble_hs_lock();
 
-    if (white_list_count == 0) {
-        rc = BLE_HS_EINVAL;
-        goto done;
-    }
-
     for (i = 0; i < white_list_count; i++) {
         if (addrs[i].type != BLE_ADDR_PUBLIC &&
             addrs[i].type != BLE_ADDR_RANDOM) {
@@ -2687,14 +2692,27 @@ ble_gap_ext_adv_params_tx(uint8_t instance,
     if (params->high_duty_directed) {
         cmd.props |= BLE_HCI_LE_SET_EXT_ADV_PROP_HD_DIRECTED;
     }
-    if (params->legacy_pdu) {
-        cmd.props |= BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY;
-    }
     if (params->anonymous) {
         cmd.props |= BLE_HCI_LE_SET_EXT_ADV_PROP_ANON_ADV;
     }
     if (params->include_tx_power) {
         cmd.props |= BLE_HCI_LE_SET_EXT_ADV_PROP_INC_TX_PWR;
+    }
+    if (params->legacy_pdu) {
+        cmd.props |= BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY;
+
+        /* check right away if the applied configuration is valid before handing
+         * the command to the controller to improve error reporting */
+        switch (cmd.props) {
+            case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_IND:
+            case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_LD_DIR:
+            case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_HD_DIR:
+            case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_SCAN:
+            case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_NONCONN:
+                break;
+            default:
+                return BLE_HS_EINVAL;
+        }
     }
 
     /* Fill optional fields if application did not specify them. */
@@ -5779,7 +5797,7 @@ ble_gap_enc_event(uint16_t conn_handle, int status,
         return;
     }
 
-    /* If encryption succeded and encryption has been restored for bonded device,
+    /* If encryption succeeded and encryption has been restored for bonded device,
      * notify gatt server so it has chance to send notification/indication if needed.
      */
     if (security_restored) {

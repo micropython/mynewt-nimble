@@ -17,15 +17,21 @@
  * under the License.
  */
 
-#ifndef H_BSP_H
-#define H_BSP_H
+#ifndef H_BLE_LL_HCI_PRIV_
+#define H_BLE_LL_HCI_PRIV_
 
 #ifdef __cplusplus
 extern "C" {
+#endif
+
+#if MYNEWT_VAL(BLE_LL_HCI_VS)
+void ble_ll_hci_vs_init(void);
+int ble_ll_hci_vs_cmd_proc(const uint8_t *cmdbuf, uint8_t cmdlen, uint16_t ocf,
+                           uint8_t *rspbuf, uint8_t *rsplen);
 #endif
 
 #ifdef __cplusplus
 }
 #endif
 
-#endif  /* H_BSP_H */
+#endif /* H_BLE_LL_HCI_ */

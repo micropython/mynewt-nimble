@@ -229,7 +229,7 @@ tud_bt_hci_cmd_cb(void *hci_cmd, size_t cmd_len)
     if (ble_hci_usb_rx_cmd_ll_cb) {
         buf = ble_hci_trans_buf_alloc(BLE_HCI_TRANS_BUF_CMD);
         assert(buf != NULL);
-        memcpy(buf, hci_cmd, cmd_len);
+        memcpy(buf, hci_cmd, min(cmd_len, BLE_HCI_TRANS_CMD_SZ));
 
         rc = ble_hci_usb_rx_cmd_ll_cb(buf, ble_hci_usb_rx_cmd_ll_arg);
     }
@@ -284,6 +284,11 @@ ble_hci_trans_ll_evt_tx(uint8_t *hci_ev)
     bool first;
 
     assert(hci_ev != NULL);
+
+    if (!tud_ready()) {
+        ble_hci_trans_buf_free(hci_ev);
+        return 0;
+    }
 
     pkt = os_memblock_get(&ble_hci_pkt_pool);
     if (pkt == NULL) {

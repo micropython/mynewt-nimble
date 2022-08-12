@@ -1061,10 +1061,22 @@ struct ble_hci_le_set_host_feat_cp {
     uint8_t val;
 } __attribute__((packed));
 
-/* --- Vendor specific commands (OGF 0x00FF) */
-#define BLE_HCI_OCF_VS_RD_STATIC_ADDR                 (0x0001)
+/* --- Vendor specific commands (OGF 0x003F) */
+/* Read Random Static Address */
+#define BLE_HCI_OCF_VS_RD_STATIC_ADDR                   (0x0001)
 struct ble_hci_vs_rd_static_addr_rp {
     uint8_t addr[6];
+} __attribute__((packed));
+
+/* Set default transmit power. Actual selected TX power is returned
+ * in reply. Setting 0xff restores controller reset default.
+ */
+#define BLE_HCI_OCF_VS_SET_TX_PWR                       (0x0002)
+struct ble_hci_vs_set_tx_pwr_cp {
+    int8_t tx_power;
+} __attribute__((packed));
+struct ble_hci_vs_set_tx_pwr_rp {
+    int8_t tx_power;
 } __attribute__((packed));
 
 /* Command Specific Definitions */
@@ -1152,11 +1164,13 @@ struct ble_hci_vs_rd_static_addr_rp {
 
 /* Scan interval and scan window timing */
 #define BLE_HCI_SCAN_ITVL                   (625)           /* usecs */
-#define BLE_HCI_SCAN_ITVL_MIN               (4)             /* units */
-#define BLE_HCI_SCAN_ITVL_MAX               (16384)         /* units */
+#define BLE_HCI_SCAN_ITVL_MIN               (0x0004)        /* units */
+#define BLE_HCI_SCAN_ITVL_MAX               (0x4000)        /* units */
+#define BLE_HCI_SCAN_ITVL_MAX_EXT           (0xffff)        /* units */
 #define BLE_HCI_SCAN_ITVL_DEF               (16)            /* units */
-#define BLE_HCI_SCAN_WINDOW_MIN             (4)             /* units */
-#define BLE_HCI_SCAN_WINDOW_MAX             (16384)         /* units */
+#define BLE_HCI_SCAN_WINDOW_MIN             (0x0004)        /* units */
+#define BLE_HCI_SCAN_WINDOW_MAX             (0x4000)        /* units */
+#define BLE_HCI_SCAN_WINDOW_MAX_EXT         (0xffff)        /* units */
 #define BLE_HCI_SCAN_WINDOW_DEF             (16)            /* units */
 
 /*
@@ -1444,8 +1458,8 @@ struct ble_hci_ev_auth_pyld_tmo {
 
 #define BLE_HCI_EVCODE_SAM_STATUS_CHG       (0x58)
 
-#define BLE_HCI_EVCODE_VENDOR_DEBUG         (0xFF)
-struct ble_hci_ev_vendor_debug {
+#define BLE_HCI_EVCODE_VS_DEBUG             (0xFF)
+struct ble_hci_ev_vs_debug {
     uint8_t id;
     uint8_t data[0];
 } __attribute__((packed));
@@ -1826,6 +1840,7 @@ struct ble_hci_ev_le_subev_biginfo_adv_report {
 #define BLE_HCI_VER_BCS_5_0                 (9)
 #define BLE_HCI_VER_BCS_5_1                 (10)
 #define BLE_HCI_VER_BCS_5_2                 (11)
+#define BLE_HCI_VER_BCS_5_3                 (12)
 
 #define BLE_LMP_VER_BCS_1_0b                (0)
 #define BLE_LMP_VER_BCS_1_1                 (1)
@@ -1839,6 +1854,7 @@ struct ble_hci_ev_le_subev_biginfo_adv_report {
 #define BLE_LMP_VER_BCS_5_0                 (9)
 #define BLE_LMP_VER_BCS_5_1                 (10)
 #define BLE_LMP_VER_BCS_5_2                 (11)
+#define BLE_LMP_VER_BCS_5_3                 (12)
 
 /* selected HCI and LMP version */
 #if MYNEWT_VAL(BLE_VERSION) == 50
@@ -1850,7 +1866,9 @@ struct ble_hci_ev_le_subev_biginfo_adv_report {
 #elif MYNEWT_VAL(BLE_VERSION) == 52
 #define BLE_HCI_VER_BCS BLE_HCI_VER_BCS_5_2
 #define BLE_LMP_VER_BCS BLE_LMP_VER_BCS_5_2
-
+#elif MYNEWT_VAL(BLE_VERSION) == 53
+#define BLE_HCI_VER_BCS BLE_HCI_VER_BCS_5_3
+#define BLE_LMP_VER_BCS BLE_LMP_VER_BCS_5_3
 #endif
 
 #define BLE_HCI_DATA_HDR_SZ                 4

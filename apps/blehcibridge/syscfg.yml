@@ -1,4 +1,3 @@
-#
 # Licensed to the Apache Software Foundation (ASF) under one
 # or more contributor license agreements.  See the NOTICE file
 # distributed with this work for additional information
@@ -17,11 +16,21 @@
 # under the License.
 #
 
-pkg.name: porting/targets/dummy_bsp
-pkg.type: bsp
-pkg.description: A dummy BSP definition
-pkg.author: "Apache Mynewt <dev@mynewt.apache.org>"
-pkg.homepage: "http://mynewt.apache.org/"
-pkg.keywords:
-pkg.cflags:
-pkg.deps:
+syscfg.defs:
+    CONSOLE_MODE:
+        description: Which console to use
+        value: stub
+        choices:
+            - full
+            - minimal
+            - stub
+
+syscfg.vals:
+    # Default task settings
+    OS_MAIN_STACK_SIZE: 64
+    # Use USB transport by default
+    BLE_HCI_TRANSPORT: usb
+
+    SHELL_TASK: 1
+
+    BLE_HCI_BRIDGE: 1

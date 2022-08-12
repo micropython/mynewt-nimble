@@ -23,6 +23,30 @@ syscfg.defs:
             this setting shall not be overriden.
         value: 1
 
+    BLE_LL_ROLE_CENTRAL:
+        description: 'Enables controller support for the Central role.'
+        value: MYNEWT_VAL(BLE_ROLE_CENTRAL)
+        restrictions:
+            - 'BLE_LL_ROLE_OBSERVER if 1'
+
+    BLE_LL_ROLE_PERIPHERAL:
+        description: 'Enables controller support for the Peripheral role.'
+        value: MYNEWT_VAL(BLE_ROLE_PERIPHERAL)
+        restrictions:
+            - 'BLE_LL_ROLE_BROADCASTER if 1'
+
+    BLE_LL_ROLE_BROADCASTER:
+        description: 'Enables controller support for the Broadcaster role.'
+        value: MYNEWT_VAL(BLE_ROLE_BROADCASTER)
+        restrictions:
+            - 'BLE_LL_ROLE_OBSERVER if 0'
+
+    BLE_LL_ROLE_OBSERVER:
+        description: 'Enables controller support for the Observer role.'
+        value: MYNEWT_VAL(BLE_ROLE_OBSERVER)
+        restrictions:
+            - 'BLE_LL_ROLE_BROADCASTER if 0'
+
     BLE_HW_WHITELIST_ENABLE:
         description: >
             Used to enable hardware white list
@@ -44,7 +68,9 @@ syscfg.defs:
         range: 0..500
 
     BLE_LL_TX_PWR_DBM:
-        description: 'Transmit power level.'
+        description: >
+            Default Transmit power level (in dBm). Actual transmit power
+            may be rounded up or down depending on used radio.
         value: '0'
 
     BLE_LL_NUM_COMP_PKT_ITVL_MS:
@@ -163,6 +189,11 @@ syscfg.defs:
             PHY enabled all the time.
         value: MYNEWT_VAL(BLE_XTAL_SETTLE_TIME)
 
+    BLE_LL_HCI_LLCP_TRACE:
+        description: >
+            Enables LLCP tracing using HCI vendor-specific events.
+        value: '0'
+
     # Configuration for LL supported features.
     #
     # There are a total 8 features that the LL can support. These can be found
@@ -179,21 +210,21 @@ syscfg.defs:
         description: >
             This option enables/disables encryption support in the controller.
             This option saves both both code and RAM.
-        value: '1'
+        value: 'MYNEWT_VAL_BLE_LL_ROLE_CENTRAL || MYNEWT_VAL_BLE_LL_ROLE_PERIPHERAL'
 
     BLE_LL_CFG_FEAT_CONN_PARAM_REQ:
         description: >
             This option enables/disables the connection parameter request
             procedure.  This is implemented in the controller but is disabled
             by default.
-        value: '1'
+        value: 'MYNEWT_VAL_BLE_LL_ROLE_CENTRAL || MYNEWT_VAL_BLE_LL_ROLE_PERIPHERAL'
 
     BLE_LL_CFG_FEAT_SLAVE_INIT_FEAT_XCHG:
         description: >
             This option allows a slave to initiate the feature exchange
             procedure.  This feature is implemented but currently has no impact
             on code or ram size
-        value: '1'
+        value: 'MYNEWT_VAL_BLE_LL_ROLE_CENTRAL || MYNEWT_VAL_BLE_LL_ROLE_PERIPHERAL'
 
     BLE_LL_CFG_FEAT_LE_PING:
         description: >
@@ -208,7 +239,7 @@ syscfg.defs:
             the controller. If enabled, the controller is allowed to change the
             size of tx/rx pdu's used in a connection. This option has only
             minor impact on code size and non on RAM.
-        value: '1'
+        value: 'MYNEWT_VAL_BLE_LL_ROLE_CENTRAL || MYNEWT_VAL_BLE_LL_ROLE_PERIPHERAL'
 
     BLE_LL_CFG_FEAT_LL_PRIVACY:
         description: >
@@ -243,8 +274,6 @@ syscfg.defs:
             This option is used to enable/disable support for Periodic
             Advertising Feature.
         value: MYNEWT_VAL(BLE_PERIODIC_ADV)
-        restrictions:
-            - 'BLE_LL_CFG_FEAT_LL_EXT_ADV if 1'
 
     BLE_LL_CFG_FEAT_LL_PERIODIC_ADV_SYNC_CNT:
         description: >
@@ -268,6 +297,8 @@ syscfg.defs:
             limit number of ACL packets sent at once from controller to avoid
             congestion on HCI transport if feature is also supported by host.
         value: 0
+        restrictions:
+            - '(BLE_ROLE_CENTRAL || BLE_ROLE_PERIPHERAL) if 1'
 
     BLE_LL_CFG_FEAT_LL_SCA_UPDATE:
         description: >
@@ -291,20 +322,25 @@ syscfg.defs:
         restrictions:
             - 'BLE_LL_CFG_FEAT_LL_ISO if 1'
 
+    BLE_LL_SCAN_AUX_SEGMENT_CNT:
+         description: >
+            Number of auxiliary advertising segments that can be scanned
+            concurrently (Core 5.2, Vol 6, Part B, 4.4.2.2.2).
+         value: 8
+
     BLE_LL_EXT_ADV_AUX_PTR_CNT:
          description: >
             This option configure a max number of scheduled outstanding auxiliary
             packets for receive on secondary advertising channel.
          value: 0
 
-    BLE_PUBLIC_DEV_ADDR:
+    BLE_LL_PUBLIC_DEV_ADDR:
         description: >
-            Allows the target or app to override the public device address
-            used by the controller. If all zero, the controller will
-            attempt to retrieve the public device address from its
-            chip specific location. If non-zero, this address will
-            be used.
-        value: "(uint8_t[6]){0x00, 0x00, 0x00, 0x00, 0x00, 0x00}"
+            Set public device address. Address is specified as 48-bit number.
+            If non-zero, this setting has priority over BLE_PUBLIC_DEV_ADDR.
+            Note: this setting should only be used for testing purposes, it is
+                  not intended for production builds.
+        value: 0x000000000000
 
     BLE_LL_DTM:
         description: >
@@ -329,12 +365,34 @@ syscfg.defs:
              depending on specified HCI command length.
         value: 0
 
-    BLE_LL_VND_EVENT_ON_ASSERT:
+    BLE_LL_HCI_VS:
+        description: >
+            Enables support for vendor-specific HCI commands.
+        value: MYNEWT_VAL(BLE_HCI_VS)
+
+    BLE_LL_HCI_VS_EVENT_ON_ASSERT:
         description: >
             This options enables controller to send a vendor-specific event on
             an assertion in controller code. The event contains file name and
             line number where assertion occured.
         value: 0
+
+    BLE_LL_PA:
+        description: Enable PA support
+        value: 0
+    BLE_LL_PA_GPIO:
+        description: >
+            GPIO pin number to control PA. Pin is set to high state when PA
+            should be enabled.
+        value: -1
+    BLE_LL_LNA:
+        description: Enable LNA support
+        value: 0
+    BLE_LL_LNA_GPIO:
+        description: >
+            GPIO pin number to control LNA. Pin is set to high state when LNA
+            should be enabled.
+        value: -1
 
     BLE_LL_SYSINIT_STAGE:
         description: >
@@ -356,10 +414,15 @@ syscfg.defs:
             GPIO pin number to debug scheduler running (on timer). Pin is set
             to high state while scheduler is running.
         value: -1
-    BLE_LL_DEBUG_GPIO_SCHED_ITEM_CB:
+    BLE_LL_DEBUG_GPIO_SCHED_ITEM:
         description: >
             GPIO pin number to debug scheduler item execution times. Pin is set
-            to high state while item is executed.
+            to high state while item is active.
+        value: -1
+    BLE_LL_DEBUG_GPIO_RFMGMT:
+        description: >
+            GPIO pin number to debug rfmgmt activity. Pin is set to high state
+            while rfmgmt is active.
         value: -1
 
 # Below settings allow to change scheduler timings. These should be left at
@@ -414,6 +477,14 @@ syscfg.defs:
         description: use BLE_LL_SCA instead
         value: 60
         deprecated: 1
+    BLE_LL_VND_EVENT_ON_ASSERT:
+        description: use BLE_LL_HCI_VS_EVENT_ON_ASSERT
+        value: 0
+        deprecated: 1
+    BLE_PUBLIC_DEV_ADDR:
+        description: use BLE_LL_PUBLIC_DEV_ADDR
+        value: "(uint8_t[6]){0x00, 0x00, 0x00, 0x00, 0x00, 0x00}"
+        deprecated: 1
 
 # defunct settings (to be removed eventually)
     BLE_DEVICE:
@@ -442,7 +513,10 @@ syscfg.vals.BLE_LL_CFG_FEAT_LL_EXT_ADV:
 # Enable vendor event on assert in standalone build to make failed assertions in
 # controller code visible when connected to external host
 syscfg.vals.!BLE_HOST:
-    BLE_LL_VND_EVENT_ON_ASSERT: 1
+    BLE_LL_HCI_VS_EVENT_ON_ASSERT: 1
 
 syscfg.restrictions:
     - OS_CPUTIME_FREQ == 32768
+    - BLE_LL_PUBLIC_DEV_ADDR <= 0xffffffffffff
+    - BLE_LL_PA == 0 || BLE_LL_PA_GPIO >= 0
+    - BLE_LL_LNA == 0 || BLE_LL_LNA_GPIO >= 0

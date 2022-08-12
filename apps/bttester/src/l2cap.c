@@ -249,6 +249,7 @@ tester_l2cap_event(struct ble_l2cap_event *event, void *arg)
 {
 	struct ble_l2cap_chan_info chan_info;
 	int accept_response;
+	struct ble_gap_conn_desc conn;
 
 	switch (event->type) {
 		case BLE_L2CAP_EVENT_COC_CONNECTED:
@@ -258,8 +259,6 @@ tester_l2cap_event(struct ble_l2cap_event *event, void *arg)
 
 		if (event->connect.status) {
 			console_printf("LE COC error: %d\n", event->connect.status);
-			disconnected_cb(event->connect.conn_handle,
-					event->connect.chan, &chan_info, arg);
 			return 0;
 		}
 
@@ -288,6 +287,28 @@ tester_l2cap_event(struct ble_l2cap_event *event, void *arg)
 				event->disconnect.chan, &chan_info, arg);
 		return 0;
 	case BLE_L2CAP_EVENT_COC_ACCEPT:
+		ble_l2cap_get_chan_info(event->accept.chan, &chan_info);
+		if (chan_info.psm == 0x00F2) {
+			/* TSPX_psm_authentication_required */
+			ble_gap_conn_find(event->accept.conn_handle, &conn);
+			if (!conn.sec_state.authenticated) {
+				return BLE_HS_EAUTHEN;
+			}
+		} else if (chan_info.psm == 0x00F3) {
+			/* TSPX_psm_authorization_required */
+			ble_gap_conn_find(event->accept.conn_handle, &conn);
+			if (!conn.sec_state.encrypted) {
+				return BLE_HS_EAUTHOR;
+			}
+			return BLE_HS_EAUTHOR;
+		} else if (chan_info.psm == 0x00F4) {
+			/* TSPX_psm_encryption_key_size_required */
+			ble_gap_conn_find(event->accept.conn_handle, &conn);
+			if (conn.sec_state.key_size < 16) {
+				return BLE_HS_EENCRYPT_KEY_SZ;
+			}
+		}
+
 		accept_response = POINTER_TO_INT(arg);
 		if (accept_response) {
 			return accept_response;
@@ -375,7 +396,7 @@ static void connect(uint8_t *data, uint16_t len)
 	ble_addr_t *addr = (void *) data;
 	uint16_t mtu = htole16(cmd->mtu);
 	int rc;
-	int i;
+	int i, j;
 
 	SYS_LOG_DBG("connect: type: %d addr: %s", addr->type, bt_hex(addr->val, 6));
 
@@ -397,6 +418,8 @@ static void connect(uint8_t *data, uint16_t len)
 			SYS_LOG_ERR("No free channels");
 			goto fail;
 		}
+		/* temporarily mark channel as used to select next one */
+        chan->state = 1;
 
 		rp->chan_ids[i] = chan->chan_id;
 
@@ -405,6 +428,15 @@ static void connect(uint8_t *data, uint16_t len)
 			SYS_LOG_ERR("Failed to alloc buf");
 			goto fail;
 		}
+	}
+
+	/* mark selected channels as unused again */
+	for (i = 0; i < cmd->num; i++) {
+	    for (j = 0; j < CHANNELS; j++) {
+	        if (rp->chan_ids[i] == channels[j].chan_id) {
+	            channels[j].state = 0;
+	        }
+	    }
 	}
 
 	if (cmd->num == 1) {

@@ -784,16 +784,17 @@ ble_l2cap_sig_credit_base_reconfig_req_rx(uint16_t conn_handle,
 
         if (chan[i]->peer_coc_mps > req->mps) {
             reduction_mps++;
-            if (reduction_mps > 1) {
-                rsp->result = htole16(BLE_L2CAP_ERR_RECONFIG_REDUCTION_MPS_NOT_ALLOWED);
-                goto failed;
-            }
         }
 
         if (chan[i]->coc_tx.mtu > req->mtu) {
             rsp->result = htole16(BLE_L2CAP_ERR_RECONFIG_REDUCTION_MTU_NOT_ALLOWED);
             goto failed;
         }
+    }
+
+    if (reduction_mps > 0 && cid_cnt > 1) {
+        rsp->result = htole16(BLE_L2CAP_ERR_RECONFIG_REDUCTION_MPS_NOT_ALLOWED);
+        goto failed;
     }
 
     ble_hs_unlock();
@@ -1047,6 +1048,7 @@ ble_l2cap_sig_credit_base_con_rsp_rx(uint16_t conn_handle,
     struct ble_hs_conn *conn;
     int rc;
     int i;
+    uint16_t duplicated_cids[5] = {};
 
 #if !BLE_MONITOR
     BLE_HS_LOG(DEBUG, "L2CAP LE COC connection response received\n");
@@ -1092,6 +1094,12 @@ ble_l2cap_sig_credit_base_con_rsp_rx(uint16_t conn_handle,
             chan->dcid = 0;
             continue;
         }
+        if (ble_hs_conn_chan_find_by_dcid(conn, rsp->dcids[i])) {
+            duplicated_cids[i] = rsp->dcids[i];
+            chan->dcid = 0;
+            continue;
+        }
+
         chan->peer_coc_mps = le16toh(rsp->mps);
         chan->dcid = le16toh(rsp->dcids[i]);
         chan->coc_tx.mtu = le16toh(rsp->mtu);
@@ -1103,6 +1111,16 @@ ble_l2cap_sig_credit_base_con_rsp_rx(uint16_t conn_handle,
     ble_hs_unlock();
 
 done:
+    for (i = 0; i < 5; i++){
+        if (duplicated_cids[i] != 0){
+            ble_hs_lock();
+            conn = ble_hs_conn_find(conn_handle);
+            chan = ble_hs_conn_chan_find_by_dcid(conn, duplicated_cids[i]);
+            ble_hs_unlock();
+            rc = ble_l2cap_sig_disconnect(chan);
+        }
+    }
+
     ble_l2cap_sig_coc_connect_cb(proc, rc);
     ble_l2cap_sig_proc_free(proc);
 
@@ -1540,7 +1558,13 @@ ble_l2cap_sig_disc_req_rx(uint16_t conn_handle, struct ble_l2cap_sig_hdr *hdr,
      * is from peer perspective. It is source CID from nimble perspective
      */
     chan = ble_hs_conn_chan_find_by_scid(conn, le16toh(req->dcid));
-    if (!chan || (le16toh(req->scid) != chan->dcid)) {
+    if (!chan) {
+        os_mbuf_free_chain(txom);
+        ble_hs_unlock();
+        ble_l2cap_sig_reject_invalid_cid_tx(conn_handle, hdr->identifier, req->dcid, req->scid);
+        return 0;
+    }
+    if (le16toh(req->scid) != chan->dcid) {
         os_mbuf_free_chain(txom);
         ble_hs_unlock();
         return 0;

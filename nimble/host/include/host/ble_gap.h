@@ -1160,7 +1160,19 @@ struct ble_gap_ext_adv_params {
     /** If perform high-duty directed advertising */
     unsigned int high_duty_directed:1;
 
-    /** If use legacy PDUs for advertising */
+    /** If use legacy PDUs for advertising.
+     *
+     *  Valid combinations of the connectable, scannable, directed,
+     *  high_duty_directed options with the legcy_pdu flag are:
+     *  - IND       -> legacy_pdu + connectable + scannable
+     *  - LD_DIR    -> legacy_pdu + connectable + directed
+     *  - HD_DIR    -> legacy_pdu + connectable + directed + high_duty_directed
+     *  - SCAN      -> legacy_pdu + scannable
+     *  - NONCONN   -> legacy_pdu
+     *
+     * Any other combination of these options combined with the legacy_pdu flag
+     * are invalid.
+     */
     unsigned int legacy_pdu:1;
 
     /** If perform anonymous advertising */
@@ -1314,6 +1326,18 @@ int ble_gap_ext_adv_remove(uint8_t instance);
  *                      other error code on failure.
  */
 int ble_gap_ext_adv_clear(void);
+
+/**
+ * Indicates whether an advertisement procedure is currently in progress on
+ * the specified Instance
+ *
+ * @param instance            Instance Id
+ *
+ * @return 0 if there is no active advertising procedure for the instance,
+ *         1 otherwise
+ *
+ */
+int ble_gap_ext_adv_active(uint8_t instance);
 #endif
 
 /* Periodic Advertising */
@@ -1592,6 +1616,16 @@ int ble_gap_disc(uint8_t own_addr_type, int32_t duration_ms,
  *                              its last Scan Duration until it begins the
  *                              subsequent Scan Duration. Specify 0 to scan
  *                              continuously. Units are 1.28 second.
+ * @param filter_duplicates     Set to enable packet filtering in the
+ *                              controller
+ * @param filter_policy         Set the used filter policy. Valid values are:
+ *                                      - BLE_HCI_SCAN_FILT_NO_WL
+ *                                      - BLE_HCI_SCAN_FILT_USE_WL
+ *                                      - BLE_HCI_SCAN_FILT_NO_WL_INITA
+ *                                      - BLE_HCI_SCAN_FILT_USE_WL_INITA
+ *                                      - BLE_HCI_SCAN_FILT_MAX
+ *                              This parameter is ignored unless
+ *                              @p filter_duplicates is set.
  * @param limited               If limited discovery procedure should be used.
  * @param uncoded_params        Additional arguments specifying the particulars
  *                              of the discovery procedure for uncoded PHY.

@@ -63,6 +63,10 @@ static struct os_callout connected_ev_co;
 static struct gap_device_connected_ev connected_ev;
 #define CONNECTED_EV_DELAY_MS(itvl) 8 * BLE_HCI_CONN_ITVL * itvl / 1000
 static int connection_attempts;
+#if MYNEWT_VAL(BTTESTER_PRIVACY_MODE) && MYNEWT_VAL(BTTESTER_USE_NRPA)
+static int64_t advertising_start;
+static struct os_callout bttester_nrpa_rotate_timer;
+#endif
 
 static const struct ble_gap_conn_params dflt_conn_params = {
 	.scan_itvl = 0x0010,
@@ -162,18 +166,6 @@ static void controller_index_list(uint8_t *data,  uint16_t len)
 		    BTP_INDEX_NONE, (uint8_t *) rp, sizeof(buf));
 }
 
-static int check_pub_addr_unassigned(void)
-{
-#ifdef ARCH_sim
-	return 0;
-#else
-	uint8_t zero_addr[BLE_DEV_ADDR_LEN] = { 0 };
-
-	return memcmp(MYNEWT_VAL(BLE_PUBLIC_DEV_ADDR),
-		      zero_addr, BLE_DEV_ADDR_LEN) == 0;
-#endif
-}
-
 static void controller_info(uint8_t *data, uint16_t len)
 {
 	struct gap_read_controller_info_rp rp;
@@ -208,15 +200,14 @@ static void controller_info(uint8_t *data, uint16_t len)
 		supported_settings |= BIT(GAP_SETTINGS_PRIVACY);
 		memcpy(rp.address, addr.val, sizeof(rp.address));
 	} else {
-		if (check_pub_addr_unassigned()) {
+		rc = ble_hs_id_copy_addr(BLE_ADDR_PUBLIC, rp.address, NULL);
+		if (rc) {
 			own_addr_type = BLE_OWN_ADDR_RANDOM;
 			memcpy(rp.address, addr.val, sizeof(rp.address));
 			supported_settings |= BIT(GAP_SETTINGS_STATIC_ADDRESS);
 			current_settings |= BIT(GAP_SETTINGS_STATIC_ADDRESS);
 		} else {
 			own_addr_type = BLE_OWN_ADDR_PUBLIC;
-			memcpy(rp.address, MYNEWT_VAL(BLE_PUBLIC_DEV_ADDR),
-			       sizeof(rp.address));
 		}
 	}
 
@@ -247,6 +238,38 @@ static struct ble_gap_adv_params adv_params = {
 	.conn_mode = BLE_GAP_CONN_MODE_NON,
 	.disc_mode = BLE_GAP_DISC_MODE_NON,
 };
+
+#if MYNEWT_VAL(BTTESTER_PRIVACY_MODE) && MYNEWT_VAL(BTTESTER_USE_NRPA)
+static void rotate_nrpa_cb(struct os_event *ev)
+{
+    int rc;
+    ble_addr_t addr;
+    int32_t duration_ms = BLE_HS_FOREVER;
+    int32_t remaining_time;
+    os_time_t remaining_ticks;
+
+    if (adv_params.disc_mode == BLE_GAP_DISC_MODE_LTD) {
+        duration_ms = MYNEWT_VAL(BTTESTER_LTD_ADV_TIMEOUT);
+    }
+
+    ble_gap_adv_stop();
+    rc = ble_hs_id_gen_rnd(1, &addr);
+    assert(rc == 0);
+    rc = ble_hs_id_set_rnd(addr.val);
+    assert(rc == 0);
+
+    ble_gap_adv_start(own_addr_type, NULL, duration_ms,
+                      &adv_params, gap_event_cb, NULL);
+
+    remaining_time = os_get_uptime_usec() - advertising_start;
+    if (remaining_time > 0) {
+        advertising_start = os_get_uptime_usec();
+        os_time_ms_to_ticks(remaining_time, &remaining_ticks);
+        os_callout_reset(&bttester_nrpa_rotate_timer,
+                         remaining_ticks);
+    }
+}
+#endif
 
 static void set_connectable(uint8_t *data, uint16_t len)
 {
@@ -418,6 +441,13 @@ static void start_advertising(const uint8_t *data, uint16_t len)
 		duration_ms = MYNEWT_VAL(BTTESTER_LTD_ADV_TIMEOUT);
 	}
 
+#if MYNEWT_VAL(BTTESTER_PRIVACY_MODE) && MYNEWT_VAL(BTTESTER_USE_NRPA)
+	if (MYNEWT_VAL(BTTESTER_NRPA_TIMEOUT) < duration_ms / 1000) {
+	    advertising_start = os_get_uptime_usec();
+	    os_callout_reset(&bttester_nrpa_rotate_timer,
+                         OS_TICKS_PER_SEC * MYNEWT_VAL(BTTESTER_NRPA_TIMEOUT));
+	}
+#endif
 	err = ble_gap_adv_start(own_addr_type, NULL, duration_ms,
 				&adv_params, gap_event_cb, NULL);
 	if (err) {
@@ -1675,7 +1705,10 @@ uint8_t tester_init_gap(void)
 		return BTP_STATUS_FAILED;
 	}
 #endif
-
+#if MYNEWT_VAL(BTTESTER_PRIVACY_MODE) && MYNEWT_VAL(BTTESTER_USE_NRPA)
+	os_callout_init(&bttester_nrpa_rotate_timer, os_eventq_dflt_get(),
+                    rotate_nrpa_cb, NULL);
+#endif
 	adv_buf = NET_BUF_SIMPLE(ADV_BUF_LEN);
 
 	tester_init_gap_cb(BTP_STATUS_SUCCESS);

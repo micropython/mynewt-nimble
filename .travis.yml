@@ -26,9 +26,10 @@ _addons: &addon_conf
     packages:
       - gcc-multilib
       - gcc-7-multilib
+      - g++-multilib
 
 go:
-  - "1.12"
+  - "1.16"
 
 git:
   depth: false

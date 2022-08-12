@@ -41,6 +41,9 @@
 #include "controller/ble_ll_utils.h"
 #include "controller/ble_ll_rfmgmt.h"
 #include "ble_ll_conn_priv.h"
+#include "ble_ll_priv.h"
+
+#if MYNEWT_VAL(BLE_LL_ROLE_BROADCASTER)
 
 /* XXX: TODO
  * 1) Need to look at advertising and scan request PDUs. Do I allocate these
@@ -110,7 +113,6 @@ struct ble_ll_adv_sm
     uint32_t adv_event_start_time;
     uint32_t adv_pdu_start_time;
     uint32_t adv_end_time;
-    uint32_t adv_rpa_timer;
     uint8_t adva[BLE_DEV_ADDR_LEN];
     uint8_t adv_rpa[BLE_DEV_ADDR_LEN];
     uint8_t peer_addr[BLE_DEV_ADDR_LEN];
@@ -119,7 +121,9 @@ struct ble_ll_adv_sm
     struct os_mbuf *new_adv_data;
     struct os_mbuf *scan_rsp_data;
     struct os_mbuf *new_scan_rsp_data;
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
     uint8_t *conn_comp_ev;
+#endif
     struct ble_npl_event adv_txdone_ev;
     struct ble_ll_sched_item adv_sch;
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_CSA2)
@@ -206,6 +210,8 @@ struct ble_ll_adv_sm
 /* The advertising state machine global object */
 struct ble_ll_adv_sm g_ble_ll_adv_sm[BLE_ADV_INSTANCES];
 struct ble_ll_adv_sm *g_ble_ll_cur_adv_sm;
+
+static void ble_ll_adv_drop_event(struct ble_ll_adv_sm *advsm);
 
 static struct ble_ll_adv_sm *
 ble_ll_adv_sm_find_configured(uint8_t instance)
@@ -550,11 +556,6 @@ ble_ll_adv_pdu_make(uint8_t *dptr, void *pducb_arg, uint8_t *hdr_byte)
 
     /* only ADV_EXT_IND goes on primary advertising channels */
     pdu_type = BLE_ADV_PDU_TYPE_ADV_EXT_IND;
-
-    /* Set TxAdd to random if needed. */
-    if (advsm->flags & BLE_LL_ADV_SM_FLAG_TX_ADD) {
-        pdu_type |= BLE_ADV_PDU_HDR_TXADD_RAND;
-    }
 
     *hdr_byte = pdu_type;
 
@@ -958,6 +959,7 @@ struct aux_conn_rsp_data {
  *
  * @param advsm
  */
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
 static uint8_t
 ble_ll_adv_aux_conn_rsp_pdu_make(uint8_t *dptr, void *pducb_arg,
                                  uint8_t *hdr_byte)
@@ -1006,6 +1008,7 @@ ble_ll_adv_aux_conn_rsp_pdu_make(uint8_t *dptr, void *pducb_arg,
     return pdulen;
 }
 #endif
+#endif
 
 /**
  * Called to indicate the advertising event is over.
@@ -1021,7 +1024,7 @@ ble_ll_adv_tx_done(void *arg)
     struct ble_ll_adv_sm *advsm;
 
     /* reset power to max after advertising */
-    ble_phy_txpwr_set(MYNEWT_VAL(BLE_LL_TX_PWR_DBM));
+    ble_phy_txpwr_set(g_ble_ll_tx_power);
 
     advsm = (struct ble_ll_adv_sm *)arg;
 
@@ -1055,12 +1058,7 @@ ble_ll_adv_tx_done(void *arg)
 void
 ble_ll_adv_event_rmvd_from_sched(struct ble_ll_adv_sm *advsm)
 {
-    /*
-     * Need to set advertising channel to final chan so new event gets
-     * scheduled.
-     */
-    advsm->adv_chan = ble_ll_adv_final_chan(advsm);
-    ble_npl_eventq_put(&g_ble_ll_data.ll_evq, &advsm->adv_txdone_ev);
+    ble_ll_adv_drop_event(advsm);
 }
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_PERIODIC_ADV)
@@ -1536,7 +1534,8 @@ ble_ll_adv_aux_schedule_next(struct ble_ll_adv_sm *advsm)
      * scheduled aux will fit inside duration. If not, remove it from scheduler
      * so advertising will stop after current aux.
      */
-    if (advsm->duration && (aux_next->sch.end_time > advsm->adv_end_time)) {
+    if (advsm->duration &&
+        CPUTIME_GT(aux_next->sch.end_time, advsm->adv_end_time)) {
         ble_ll_sched_rmv_elem(&aux_next->sch);
     }
 }
@@ -1666,7 +1665,7 @@ ble_ll_adv_aux_schedule(struct ble_ll_adv_sm *advsm)
      * not start extended advertising event which we cannot finish in time.
      */
     if (advsm->duration &&
-            (AUX_CURRENT(advsm)->sch.end_time > advsm->adv_end_time)) {
+        CPUTIME_GT(AUX_CURRENT(advsm)->sch.end_time, advsm->adv_end_time)) {
         ble_ll_adv_sm_stop_timeout(advsm);
     }
 }
@@ -1689,7 +1688,7 @@ ble_ll_adv_halt(void)
 
         ble_ll_trace_u32(BLE_LL_TRACE_ID_ADV_HALT, advsm->adv_instance);
 
-        ble_phy_txpwr_set(MYNEWT_VAL(BLE_LL_TX_PWR_DBM));
+        ble_phy_txpwr_set(g_ble_ll_tx_power);
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_PERIODIC_ADV)
         if (advsm->flags & BLE_LL_ADV_SM_FLAG_PERIODIC_SYNC_SENDING) {
@@ -1758,6 +1757,7 @@ ble_ll_adv_set_adv_params(const uint8_t *cmdbuf, uint8_t len)
     adv_filter_policy = cmd->filter_policy;
 
     switch (cmd->type) {
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
     case BLE_HCI_ADV_TYPE_ADV_DIRECT_IND_HD:
         adv_filter_policy = BLE_HCI_ADV_FILT_NONE;
         memcpy(advsm->peer_addr, cmd->peer_addr, BLE_DEV_ADDR_LEN);
@@ -1777,6 +1777,7 @@ ble_ll_adv_set_adv_params(const uint8_t *cmdbuf, uint8_t len)
     case BLE_HCI_ADV_TYPE_ADV_IND:
         props = BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_IND;
         break;
+#endif
     case BLE_HCI_ADV_TYPE_ADV_NONCONN_IND:
         props = BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_NONCONN;
         break;
@@ -1943,11 +1944,13 @@ ble_ll_adv_sm_stop(struct ble_ll_adv_sm *advsm)
         ble_npl_eventq_remove(&g_ble_ll_data.ll_evq, &advsm->adv_sec_txdone_ev);
 #endif
 
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
         /* If there is an event buf we need to free it */
         if (advsm->conn_comp_ev) {
             ble_hci_trans_buf_free(advsm->conn_comp_ev);
             advsm->conn_comp_ev = NULL;
         }
+#endif
 
         ble_ll_adv_active_chanset_clear(advsm);
 
@@ -1970,6 +1973,7 @@ ble_ll_adv_sm_stop_timeout(struct ble_ll_adv_sm *advsm)
     }
 #endif
 
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
     /*
      * For high duty directed advertising we need to send connection
      * complete event with proper status
@@ -1979,6 +1983,7 @@ ble_ll_adv_sm_stop_timeout(struct ble_ll_adv_sm *advsm)
                                     advsm->conn_comp_ev, advsm);
         advsm->conn_comp_ev = NULL;
     }
+#endif
 
     /* Disable advertising */
     ble_ll_adv_sm_stop(advsm);
@@ -2000,11 +2005,13 @@ ble_ll_adv_sm_stop_limit_reached(struct ble_ll_adv_sm *advsm)
      * be used if HD directed advertising was terminated before timeout due to
      * events count limit. For now just use same code as with duration timeout.
      */
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
     if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_HD_DIRECTED) {
         ble_ll_conn_comp_event_send(NULL, BLE_ERR_DIR_ADV_TMO,
                                     advsm->conn_comp_ev, advsm);
         advsm->conn_comp_ev = NULL;
     }
+#endif
 
     /* Disable advertising */
     ble_ll_adv_sm_stop(advsm);
@@ -2106,8 +2113,8 @@ ble_ll_adv_sync_pdu_make(uint8_t *dptr, void *pducb_arg, uint8_t *hdr_byte)
 static void
 ble_ll_adv_sync_tx_done(struct ble_ll_adv_sm *advsm)
 {
-    /* reset power to max after advertising */
-    ble_phy_txpwr_set(MYNEWT_VAL(BLE_LL_TX_PWR_DBM));
+    /* reset power to default after advertising */
+    ble_phy_txpwr_set(g_ble_ll_tx_power);
 
     /* for sync we trace a no pri nor sec set */
     ble_ll_trace_u32x2(BLE_LL_TRACE_ID_ADV_TXDONE, advsm->adv_instance, 0);
@@ -2289,7 +2296,6 @@ ble_ll_adv_periodic_schedule_first(struct ble_ll_adv_sm *advsm,
 {
     struct ble_ll_adv_sync *sync;
     struct ble_ll_sched_item *sch;
-    uint32_t sch_start;
     uint32_t max_usecs;
     uint8_t chan;
     int rc;
@@ -2332,7 +2338,7 @@ ble_ll_adv_periodic_schedule_first(struct ble_ll_adv_sm *advsm,
     sch->end_time = sch->start_time + ble_ll_usecs_to_ticks_round_up(max_usecs);
     sch->start_time -= g_ble_ll_sched_offset_ticks;
 
-    rc = ble_ll_sched_periodic_adv(sch, &sch_start, first_pdu);
+    rc = ble_ll_sched_periodic_adv(sch, first_pdu);
     if (rc) {
         STATS_INC(ble_ll_stats, periodic_adv_drop_event);
         ble_npl_eventq_put(&g_ble_ll_data.ll_evq,
@@ -2340,7 +2346,7 @@ ble_ll_adv_periodic_schedule_first(struct ble_ll_adv_sm *advsm,
         return;
     }
 
-    sync->start_time = sch_start + g_ble_ll_sched_offset_ticks;
+    sync->start_time = sch->start_time + g_ble_ll_sched_offset_ticks;
 
     assert(first_pdu ||
            (sync->start_time == advsm->periodic_adv_event_start_time));
@@ -2424,8 +2430,8 @@ ble_ll_adv_periodic_schedule_next(struct ble_ll_adv_sm *advsm)
                          sync_next);
 
     /* if we are pass advertising interval, drop chain */
-    if (sch->end_time > advsm->periodic_adv_event_start_time +
-            advsm->periodic_adv_itvl_ticks) {
+    if (CPUTIME_GT(sch->end_time, advsm->periodic_adv_event_start_time +
+                                  advsm->periodic_adv_itvl_ticks)) {
         STATS_INC(ble_ll_stats, periodic_chain_drop_event);
         ble_ll_sched_rmv_elem(&sync->sch);
         ble_npl_eventq_put(&g_ble_ll_data.ll_evq,
@@ -2638,7 +2644,6 @@ ble_ll_adv_sm_start(struct ble_ll_adv_sm *advsm)
 {
     uint8_t adv_chan;
     uint8_t *addr;
-    uint8_t *evbuf;
     uint32_t start_delay_us;
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_CSA2)
     uint32_t access_addr;
@@ -2666,16 +2671,17 @@ ble_ll_adv_sm_start(struct ble_ll_adv_sm *advsm)
      * Get an event with which to send the connection complete event if
      * this is connectable
      */
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
     if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE) {
         /* We expect this to be NULL but if not we wont allocate one... */
         if (advsm->conn_comp_ev == NULL) {
-            evbuf = ble_hci_trans_buf_alloc(BLE_HCI_TRANS_BUF_EVT_HI);
-            if (!evbuf) {
+            advsm->conn_comp_ev = ble_hci_trans_buf_alloc(BLE_HCI_TRANS_BUF_EVT_HI);
+            if (!advsm->conn_comp_ev) {
                 return BLE_ERR_MEM_CAPACITY;
             }
-            advsm->conn_comp_ev = evbuf;
         }
     }
+#endif
 
     /* Set advertising address */
     if ((advsm->own_addr_type & 1) == 0) {
@@ -3291,9 +3297,11 @@ ble_ll_adv_ext_set_param(const uint8_t *cmdbuf, uint8_t len,
 
         /* if legacy bit is set possible values are limited */
         switch (props) {
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
         case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_IND:
         case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_LD_DIR:
         case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_HD_DIR:
+#endif
         case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_SCAN:
         case BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY_NONCONN:
             break;
@@ -3302,6 +3310,12 @@ ble_ll_adv_ext_set_param(const uint8_t *cmdbuf, uint8_t len,
             goto done;
         }
     } else {
+#if !MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
+        if (props & BLE_HCI_LE_SET_EXT_ADV_PROP_CONNECTABLE) {
+            rc = BLE_ERR_INV_HCI_CMD_PARMS;
+            goto done;
+        }
+#endif
         /* HD directed advertising allowed only on legacy PDUs */
         if (props & BLE_HCI_LE_SET_EXT_ADV_PROP_HD_DIRECTED) {
             rc = BLE_ERR_INV_HCI_CMD_PARMS;
@@ -4105,6 +4119,7 @@ ble_ll_adv_periodic_set_info_transfer(const uint8_t *cmdbuf, uint8_t len,
  * @param   [in]    addr_type   Public address (0) or random address (1).
  * @return  Return 1 if already connected, 0 otherwise.
  */
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
 static int
 ble_ll_adv_already_connected(const uint8_t* addr, uint8_t addr_type)
 {
@@ -4127,6 +4142,7 @@ ble_ll_adv_already_connected(const uint8_t* addr, uint8_t addr_type)
 
     return 0;
 }
+#endif
 
 /**
  * Called when the LL receives a scan request or connection request
@@ -4152,8 +4168,10 @@ ble_ll_adv_rx_req(uint8_t pdu_type, struct os_mbuf *rxpdu)
     uint8_t *peer;
     struct ble_mbuf_hdr *ble_hdr;
     struct ble_ll_adv_sm *advsm;
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
     struct aux_conn_rsp_data rsp_data;
+#endif
 #endif
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_PRIVACY)
     struct ble_ll_resolv_entry *rl;
@@ -4261,6 +4279,7 @@ ble_ll_adv_rx_req(uint8_t pdu_type, struct os_mbuf *rxpdu)
             STATS_INC(ble_ll_stats, scan_rsp_txg);
         }
     } else if (pdu_type == BLE_ADV_PDU_TYPE_AUX_CONNECT_REQ) {
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
         /* See if the device is already connected */
         if (ble_ll_adv_already_connected(peer, peer_addr_type)) {
             return -1;
@@ -4294,6 +4313,7 @@ ble_ll_adv_rx_req(uint8_t pdu_type, struct os_mbuf *rxpdu)
             STATS_INC(ble_ll_stats, aux_conn_rsp_tx);
         }
 #endif
+#endif
     }
 
     return rc;
@@ -4309,6 +4329,7 @@ ble_ll_adv_rx_req(uint8_t pdu_type, struct os_mbuf *rxpdu)
  *
  * @return 0: no connection started. 1: connection started
  */
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
 static int
 ble_ll_adv_conn_req_rxd(uint8_t *rxbuf, struct ble_mbuf_hdr *hdr,
                         struct ble_ll_adv_sm *advsm)
@@ -4399,6 +4420,7 @@ ble_ll_adv_conn_req_rxd(uint8_t *rxbuf, struct ble_mbuf_hdr *hdr,
 
     return valid;
 }
+#endif
 
 /**
  * Called on phy rx pdu end when in advertising state.
@@ -4489,7 +4511,7 @@ ble_ll_adv_rx_pkt_in(uint8_t ptype, uint8_t *rxbuf, struct ble_mbuf_hdr *hdr)
 #endif
 
     /*
-     * It is possible that advertising was stopped and a packet plcaed on the
+     * It is possible that advertising was stopped and a packet placed on the
      * LL receive packet queue. In this case, just ignore the received packet
      * as the advertising state machine is no longer "valid"
      */
@@ -4507,9 +4529,11 @@ ble_ll_adv_rx_pkt_in(uint8_t ptype, uint8_t *rxbuf, struct ble_mbuf_hdr *hdr)
     adv_event_over = 1;
     if (BLE_MBUF_HDR_CRC_OK(hdr)) {
         if (ptype == BLE_ADV_PDU_TYPE_CONNECT_IND) {
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
             if (ble_ll_adv_conn_req_rxd(rxbuf, hdr, advsm)) {
                 adv_event_over = 0;
             }
+#endif
         } else {
             if ((ptype == BLE_ADV_PDU_TYPE_SCAN_REQ) &&
                 (hdr->rxinfo.flags & BLE_MBUF_HDR_F_SCAN_RSP_TXD)) {
@@ -4594,13 +4618,15 @@ ble_ll_adv_drop_event(struct ble_ll_adv_sm *advsm)
 static void
 ble_ll_adv_reschedule_event(struct ble_ll_adv_sm *advsm)
 {
-    int rc;
-    uint32_t start_time;
+    struct ble_ll_sched_item *sch;
     uint32_t max_delay_ticks;
+    int rc;
 
     assert(advsm->adv_enabled);
 
-    if (!advsm->adv_sch.enqueued) {
+    sch = &advsm->adv_sch;
+
+    if (!sch->enqueued) {
         if (advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_HD_DIRECTED) {
             max_delay_ticks = 0;
         } else {
@@ -4608,16 +4634,15 @@ ble_ll_adv_reschedule_event(struct ble_ll_adv_sm *advsm)
                     os_cputime_usecs_to_ticks(BLE_LL_ADV_DELAY_MS_MAX * 1000);
         }
 
-        rc = ble_ll_sched_adv_reschedule(&advsm->adv_sch, &start_time,
-                                         max_delay_ticks);
+        rc = ble_ll_sched_adv_reschedule(sch, max_delay_ticks);
         if (rc) {
             ble_ll_adv_drop_event(advsm);
             return;
         }
 
-        start_time += g_ble_ll_sched_offset_ticks;
-        advsm->adv_event_start_time = start_time;
-        advsm->adv_pdu_start_time = start_time;
+        advsm->adv_event_start_time = sch->start_time +
+                                      g_ble_ll_sched_offset_ticks;
+        advsm->adv_pdu_start_time = advsm->adv_event_start_time;
     }
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
@@ -4739,7 +4764,8 @@ ble_ll_adv_done(struct ble_ll_adv_sm *advsm)
         /* If we're past aux (unlikely, but can happen), just drop an event */
         if (!(advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_LEGACY) &&
                 advsm->aux_active &&
-                advsm->adv_pdu_start_time > AUX_CURRENT(advsm)->start_time) {
+                CPUTIME_GT(advsm->adv_pdu_start_time,
+                           AUX_CURRENT(advsm)->start_time)) {
             ble_ll_adv_drop_event(advsm);
             return;
         }
@@ -4751,7 +4777,7 @@ ble_ll_adv_done(struct ble_ll_adv_sm *advsm)
     /* check if advertising timed out */
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
     if (advsm->duration &&
-        advsm->adv_pdu_start_time >= advsm->adv_end_time) {
+        CPUTIME_GEQ(advsm->adv_pdu_start_time, advsm->adv_end_time)) {
         /* Legacy PDUs need to be stop here.
          * For ext adv it will be stopped when AUX is done (unless it was
          * dropped so check if AUX is active here as well).
@@ -4765,7 +4791,7 @@ ble_ll_adv_done(struct ble_ll_adv_sm *advsm)
     }
 #else
     if ((advsm->props & BLE_HCI_LE_SET_EXT_ADV_PROP_HD_DIRECTED) &&
-            (advsm->adv_pdu_start_time >= advsm->adv_end_time)) {
+        CPUTIME_GEQ(advsm->adv_pdu_start_time, advsm->adv_end_time)) {
         ble_ll_adv_sm_stop_timeout(advsm);
         return;
     }
@@ -4869,7 +4895,8 @@ ble_ll_adv_sec_done(struct ble_ll_adv_sm *advsm)
     ble_ll_scan_chk_resume();
 
     /* Check if advertising timed out */
-    if (advsm->duration && (advsm->adv_pdu_start_time >= advsm->adv_end_time)) {
+    if (advsm->duration &&
+        CPUTIME_GEQ(advsm->adv_pdu_start_time, advsm->adv_end_time)) {
         ble_ll_adv_sm_stop_timeout(advsm);
         return;
     }
@@ -4943,11 +4970,11 @@ ble_ll_adv_can_chg_whitelist(void)
  *
  * @return uint8_t* Pointer to event buffer
  */
+#if MYNEWT_VAL(BLE_LL_ROLE_PERIPHERAL)
 void
 ble_ll_adv_send_conn_comp_ev(struct ble_ll_conn_sm *connsm,
                              struct ble_mbuf_hdr *rxhdr)
 {
-    uint8_t *evbuf;
     struct ble_ll_adv_sm *advsm;
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LL_EXT_ADV)
@@ -4956,11 +4983,10 @@ ble_ll_adv_send_conn_comp_ev(struct ble_ll_conn_sm *connsm,
     advsm = &g_ble_ll_adv_sm[0];
 #endif
 
-    evbuf = advsm->conn_comp_ev;
-    assert(evbuf != NULL);
+    assert(advsm->conn_comp_ev != NULL);
+    ble_ll_conn_comp_event_send(connsm, BLE_ERR_SUCCESS, advsm->conn_comp_ev,
+                                advsm);
     advsm->conn_comp_ev = NULL;
-
-    ble_ll_conn_comp_event_send(connsm, BLE_ERR_SUCCESS, evbuf, advsm);
 
 #if MYNEWT_VAL(BLE_LL_CFG_FEAT_LE_CSA2)
     ble_ll_hci_ev_le_csa(connsm);
@@ -4973,6 +4999,7 @@ ble_ll_adv_send_conn_comp_ev(struct ble_ll_conn_sm *connsm,
     }
 #endif
 }
+#endif
 
 /**
  * Returns the local resolvable private address currently being using by
@@ -5134,3 +5161,5 @@ ble_ll_adv_init(void)
         ble_ll_adv_sm_init(&g_ble_ll_adv_sm[i]);
     }
 }
+
+#endif

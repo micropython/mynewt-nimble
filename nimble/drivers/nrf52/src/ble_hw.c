@@ -69,6 +69,22 @@ ble_hw_get_public_addr(ble_addr_t *addr)
     uint32_t addr_high;
     uint32_t addr_low;
 
+#if MYNEWT_VAL(BLE_PHY_UBLOX_BMD345_PUBLIC_ADDR)
+    /*
+    * The BMD-345 modules are preprogrammed from the factory with a unique public
+    * The  Bluetooth device address stored in the CUSTOMER[0] and CUSTOMER[1]
+    * registers of the User Information Configuration Registers (UICR).
+    * The Bluetooth device address consists of the IEEE Organizationally Unique
+    * Identifier (OUI) combined with the hexadecimal digits that are printed on
+    * a 2D barcode and in human-readable text on the module label.The Bluetooth
+    * device address is stored in little endian format. The most significant
+    * bytes of the CUSTOMER[1] register are 0xFF to complete the 32-bit register.
+    */
+
+    /* Copy into device address. We can do this because we know platform */
+    addr_low = NRF_UICR->CUSTOMER[0];
+    addr_high = NRF_UICR->CUSTOMER[1];
+#else
     /* Does FICR have a public address */
     if ((NRF_FICR->DEVICEADDRTYPE & 1) != 0) {
         return -1;
@@ -77,6 +93,8 @@ ble_hw_get_public_addr(ble_addr_t *addr)
     /* Copy into device address. We can do this because we know platform */
     addr_low = NRF_FICR->DEVICEADDR[0];
     addr_high = NRF_FICR->DEVICEADDR[1];
+#endif
+
     memcpy(addr->val, &addr_low, 4);
     memcpy(&addr->val[4], &addr_high, 2);
     addr->type = BLE_ADDR_PUBLIC;
@@ -474,13 +492,8 @@ ble_hw_resolv_list_size(void)
 int
 ble_hw_resolv_list_match(void)
 {
-    uint32_t index;
-
-    if (NRF_AAR->EVENTS_END) {
-        if (NRF_AAR->EVENTS_RESOLVED) {
-            index = NRF_AAR->STATUS;
-            return (int)index;
-        }
+    if (NRF_AAR->ENABLE && NRF_AAR->EVENTS_END && NRF_AAR->EVENTS_RESOLVED) {
+        return (int)NRF_AAR->STATUS;
     }
 
     return -1;
