@@ -172,7 +172,16 @@ static void
 ble_hs_stop_register_listener(struct ble_hs_stop_listener *listener,
                               ble_hs_stop_fn *fn, void *arg)
 {
+    struct ble_hs_stop_listener *node;
     BLE_HS_DBG_ASSERT(fn != NULL);
+
+    // Check, if the to-be-inserted list/node is already in the list
+    // If it is, do NOT insert it.
+    SLIST_FOREACH(node, &ble_hs_stop_listeners, link) {
+        if (listener == node) {
+            return;
+        }
+    }
 
     listener->fn = fn;
     listener->arg = arg;
